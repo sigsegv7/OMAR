@@ -68,7 +68,7 @@ struct omar_hdr {
     off_t next_hdr;
 };
 
-static void
+static inline void
 help(void)
 {
     printf("--------------------------------------\n");
