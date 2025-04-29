@@ -81,8 +81,8 @@ help(void)
 /*
  * Push a file into the archive output
  *
- * @pathname: Full path name of file
- * @name: Name of file
+ * @pathname: Full path name of file (NULL if EOF)
+ * @name: Name of file (for EOF, set to "EOF")
  */
 static int
 file_push(const char *pathname, const char *name)
@@ -93,23 +93,38 @@ file_push(const char *pathname, const char *name)
     int pad_len;
     char *buf;
 
-    /* Attempt to open the input file */
-    if ((infd = open(pathname, O_RDONLY)) < 0) {
-        perror("open");
-        return infd;
+    /* Attempt to open the input file if not EOF */
+    if (pathname != NULL) {
+        if ((infd = open(pathname, O_RDONLY)) < 0) {
+            perror("open");
+            return infd;
+        }
+
+        if ((error = fstat(infd, &sb)) < 0) {
+            return error;
+        }
     }
 
-    if ((error = fstat(infd, &sb)) < 0) {
-        return error;
+    /*
+     * The next pointer being 0 indicates that we
+     * have reached the end of the archive. If we
+     * haven't reached the end of the file, compute
+     * the next header offset.
+     */
+    if (pathname != NULL) {
+        hdr.nextptr = sizeof(hdr) + ALIGN_UP(hdr.len, BLOCK_SIZE);
+    } else {
+        hdr.nextptr = 0;
     }
-
-    /* Create and write the header */
-    hdr.len = sb.st_size;
+    hdr.len = (pathname == NULL) ? 0 : sb.st_size;
     hdr.namelen = strlen(name);
     memcpy(hdr.magic, "OMAR", sizeof(hdr.magic));
-    hdr.nextptr = sizeof(hdr) + ALIGN_UP(hdr.len, BLOCK_SIZE);
     write(outfd, &hdr, sizeof(hdr));
     write(outfd, name, hdr.namelen);
+    if (pathname == NULL) {
+        /* EOF, we are done */
+        return 0;
+    }
 
     /* If this is a dir, our work is done here */
     if (S_ISDIR(sb.st_mode)) {
@@ -187,6 +202,7 @@ archive_create(const char *base, const char *dirname)
         }
     }
 
+    file_push(NULL, "EOF");
     return 0;
 }
 
