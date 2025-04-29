@@ -105,6 +105,10 @@ file_push(const char *pathname, const char *name)
         }
     }
 
+    /* Set the lengths */
+    hdr.len = (pathname == NULL) ? 0 : sb.st_size;
+    hdr.namelen = strlen(name);
+
     /*
      * The next pointer being 0 indicates that we
      * have reached the end of the archive. If we
@@ -113,11 +117,10 @@ file_push(const char *pathname, const char *name)
      */
     if (pathname != NULL) {
         hdr.nextptr = sizeof(hdr) + ALIGN_UP(hdr.len, BLOCK_SIZE);
+        printf("NEXT POINTER: %d\n", hdr.nextptr);
     } else {
         hdr.nextptr = 0;
     }
-    hdr.len = (pathname == NULL) ? 0 : sb.st_size;
-    hdr.namelen = strlen(name);
     memcpy(hdr.magic, "OMAR", sizeof(hdr.magic));
     write(outfd, &hdr, sizeof(hdr));
     write(outfd, name, hdr.namelen);
