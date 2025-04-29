@@ -147,10 +147,9 @@ file_push(const char *pathname, const char *name)
     }
 
     /*
-     * Write the actual file contents, if
-     * the file length is not a multiple
-     * of the block size, we'll need to
-     * pad out the rest to zero
+     * Write the actual file contents, if the file length is not
+     * a multiple of the block size, we'll need to pad out the rest
+     * to zero.
      */
     write(outfd, buf, hdr.len);
     rem = hdr.len & (BLOCK_SIZE - 1);
