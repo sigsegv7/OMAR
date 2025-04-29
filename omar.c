@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <assert.h>
 #include <dirent.h>
 #include <string.h>
