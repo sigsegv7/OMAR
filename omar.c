@@ -138,7 +138,8 @@ archive_create(const char *base)
 
     dp = opendir(base);
     if (dp == NULL) {
-        return -EIO;
+        perror("opendir");
+        return -ENOENT;
     }
 
     while ((ent = readdir(dp)) != NULL) {
@@ -196,6 +197,7 @@ main(int argc, char **argv)
     }
 
     if ((error = state_init(&st)) != 0) {
+        printf("omar: failed to init state\n");
         return error;
     }
 
