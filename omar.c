@@ -38,6 +38,10 @@
 #include <assert.h>
 #include <dirent.h>
 #include <string.h>
+#include <libgen.h>
+
+/* OMAR type flags (TODO: rwx) */
+#define OMAR_DIR    (1 << 0)
 
 #define ALIGN_UP(value, align)        (((value) + (align)-1) & ~((align)-1))
 #define BLOCK_SIZE 512
@@ -57,6 +61,7 @@ static const char *outpath = NULL;
  */
 struct omar_hdr {
     char magic[4];
+    uint16_t type;
     uint32_t nextptr;
     uint32_t len;
     uint8_t namelen;
@@ -105,6 +110,13 @@ file_push(const char *pathname, const char *name)
     write(outfd, &hdr, sizeof(hdr));
     write(outfd, name, hdr.namelen);
 
+    /* If this is a dir, our work is done here */
+    if (S_ISDIR(sb.st_mode)) {
+        hdr.type |= OMAR_DIR;
+        close(infd);
+        return 0;
+    }
+
     /* We need the file data now */
     buf = malloc(hdr.len);
     if (buf == NULL) {
@@ -144,12 +156,13 @@ file_push(const char *pathname, const char *name)
  * basepath of a directory.
  */
 static int
-archive_create(const char *base)
+archive_create(const char *base, const char *dirname)
 {
     DIR *dp;
     struct dirent *ent;
     struct omar_hdr hdr;
     char pathbuf[256];
+    char namebuf[256];
 
     dp = opendir(base);
     if (dp == NULL) {
@@ -162,10 +175,13 @@ archive_create(const char *base)
             continue;
         }
         snprintf(pathbuf, sizeof(pathbuf), "%s/%s", base, ent->d_name);
+        snprintf(namebuf, sizeof(namebuf), "%s/%s", dirname, ent->d_name);
         if (ent->d_type == DT_DIR) {
-            archive_create(pathbuf);
+            printf("%s [d]\n", namebuf);
+            file_push(pathbuf, ent->d_name);
+            archive_create(pathbuf, basename(pathbuf));
         } else if (ent->d_type == DT_REG) {
-            printf("%s\n", ent->d_name);
+            printf("%s [f]\n", namebuf);
             file_push(pathbuf, ent->d_name);
         }
     }
@@ -219,7 +235,7 @@ main(int argc, char **argv)
         return outfd;
     }
 
-    retval = archive_create(inpath);
+    retval = archive_create(inpath, basename((char *)inpath));
     close(outfd);
     return retval;
 }
