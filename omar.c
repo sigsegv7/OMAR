@@ -37,36 +37,30 @@
 #include <stddef.h>
 #include <assert.h>
 #include <dirent.h>
+#include <string.h>
 
+#define ALIGN_UP(value, align)        (((value) + (align)-1) & ~((align)-1))
+#define BLOCK_SIZE 512
+
+static int outfd;
 static const char *inpath = NULL;
 static const char *outpath = NULL;
-
-/*
- * OMAR state machine.
- *
- * @outfd: Output file descriptor.
- * @inbuf: Input file buffer.
- * @pos: Position in input file.
- */
-struct omar_state {
-    int infd;
-    char *inbuf;
-    off_t pos;
-};
 
 /*
  * The OMAR file header, describes the basics
  * of a file.
  *
- * @name: Name of the file (*not* the full path)
+ * @magic: Header magic ("OMAR")
+ * @nextptr: Offset from start of archive to next header
  * @len: Length of the file
- * @next_hdr: Offset from start of archive to next header
+ * @namelen: Length of the filename
  */
 struct omar_hdr {
-    char *name;
-    size_t len;
-    off_t next_hdr;
-};
+    char magic[4];
+    uint32_t nextptr;
+    uint32_t len;
+    uint8_t namelen;
+} __attribute__((packed));
 
 static inline void
 help(void)
@@ -78,49 +72,70 @@ help(void)
     printf("--------------------------------------\n");
 }
 
-static void
-state_destroy(struct omar_state *stp)
-{
-    close(stp->infd);
-    if (stp->inbuf != NULL) {
-        free(stp->inbuf);
-    }
-}
-
+/*
+ * Push a file into the archive output
+ *
+ * @pathname: Full path name of file
+ * @name: Name of file
+ */
 static int
-state_init(struct omar_state *res)
+file_push(const char *pathname, const char *name)
 {
+    struct omar_hdr hdr;
     struct stat sb;
-    int retval = 0;
+    int infd, rem, error;
+    int pad_len;
+    char *buf;
 
-    assert(res != NULL);
-    res->infd = open(inpath, O_RDONLY);
-    if (res->infd < 0) {
+    /* Attempt to open the input file */
+    if ((infd = open(pathname, O_RDONLY)) < 0) {
         perror("open");
-        fprintf(stderr, "omar: failed to open input file\n");
-        return res->infd;
+        return infd;
     }
 
-    if ((retval = fstat(res->infd, &sb)) < 0) {
-        perror("fstat");
-        fprintf(stderr, "omar: failed to stat input file\n");
-        close(res->infd);
-        return retval;
+    if ((error = fstat(infd, &sb)) < 0) {
+        return error;
     }
 
-    if (!S_ISDIR(sb.st_mode)) {
-        fprintf(stderr, "omar: input file is not a directory\n");
-        close(res->infd);
-        return -ENOTDIR;
-    }
+    /* Create and write the header */
+    hdr.len = sb.st_size;
+    hdr.namelen = strlen(name);
+    memcpy(hdr.magic, "OMAR", sizeof(hdr.magic));
+    hdr.nextptr = sizeof(hdr) + ALIGN_UP(hdr.len, BLOCK_SIZE);
+    write(outfd, &hdr, sizeof(hdr));
+    write(outfd, name, hdr.namelen);
 
-    res->inbuf = malloc(sb.st_size);
-    if (res->inbuf == NULL) {
-        close(res->infd);
-        fprintf(stderr, "omar: failed to allocate inbuf\n");
+    /* We need the file data now */
+    buf = malloc(hdr.len);
+    if (buf == NULL) {
+        printf("out of memory\n");
+        close(infd);
         return -ENOMEM;
     }
+    if (read(infd, buf, hdr.len) <= 0) {
+        perror("read");
+        close(infd);
+        return -EIO;
+    }
 
+    /*
+     * Write the actual file contents, if
+     * the file length is not a multiple
+     * of the block size, we'll need to
+     * pad out the rest to zero
+     */
+    write(outfd, buf, hdr.len);
+    rem = hdr.len & (BLOCK_SIZE - 1);
+    if (rem != 0) {
+        /* Compute the padding length */
+        pad_len = BLOCK_SIZE - rem;
+
+        buf = realloc(buf, pad_len);
+        memset(buf, 0, pad_len);
+        write(outfd, buf, pad_len);
+    }
+    close(infd);
+    free(buf);
     return 0;
 }
 
@@ -149,8 +164,10 @@ archive_create(const char *base)
         snprintf(pathbuf, sizeof(pathbuf), "%s/%s", base, ent->d_name);
         if (ent->d_type == DT_DIR) {
             archive_create(pathbuf);
+        } else if (ent->d_type == DT_REG) {
+            printf("%s\n", ent->d_name);
+            file_push(pathbuf, ent->d_name);
         }
-        printf("%s\n", pathbuf);
     }
 
     return 0;
@@ -159,9 +176,8 @@ archive_create(const char *base)
 int
 main(int argc, char **argv)
 {
-    struct omar_state st = {0};
     int optc, retval;
-    int error;
+    int error, flags;
 
     if (argc < 2) {
         help();
@@ -196,12 +212,14 @@ main(int argc, char **argv)
         return -1;
     }
 
-    if ((error = state_init(&st)) != 0) {
-        printf("omar: failed to init state\n");
-        return error;
+    flags = S_IRUSR | S_IWUSR;
+    outfd = open(outpath, O_WRONLY | O_CREAT, flags);
+    if (outfd < 0) {
+        printf("omar: failed to open output file\n");
+        return outfd;
     }
 
     retval = archive_create(inpath);
-    state_destroy(&st);
+    close(outfd);
     return retval;
 }
