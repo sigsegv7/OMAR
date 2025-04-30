@@ -41,8 +41,13 @@
 #include <string.h>
 #include <libgen.h>
 
-/* OMAR type flags (TODO: rwx) */
-#define OMAR_DIR    (1 << 0)
+/* OMAR magic constants */
+#define OMAR_MAGIC "OMAR"
+#define OMAR_EOF "RAMO"
+
+/* OMAR type constants */
+#define OMAR_REG    0
+#define OMAR_DIR    1
 
 #define ALIGN_UP(value, align)        (((value) + (align)-1) & ~((align)-1))
 #define BLOCK_SIZE 512
@@ -56,16 +61,14 @@ static const char *outpath = NULL;
  * of a file.
  *
  * @magic: Header magic ("OMAR")
- * @nextptr: Offset from start of archive to next header
  * @len: Length of the file
  * @namelen: Length of the filename
  */
 struct omar_hdr {
     char magic[4];
-    uint16_t type;
-    uint32_t nextptr;
-    uint32_t len;
+    uint8_t type;
     uint8_t namelen;
+    uint32_t len;
 } __attribute__((packed));
 
 static inline void
@@ -91,7 +94,10 @@ file_push(const char *pathname, const char *name)
     struct stat sb;
     int infd, rem, error;
     int pad_len;
+    size_t len;
     char *buf;
+
+    hdr.type = OMAR_REG;
 
     /* Attempt to open the input file if not EOF */
     if (pathname != NULL) {
@@ -103,36 +109,44 @@ file_push(const char *pathname, const char *name)
         if ((error = fstat(infd, &sb)) < 0) {
             return error;
         }
+
+        if (S_ISDIR(sb.st_mode)) {
+            hdr.type = OMAR_DIR;
+        }
     }
 
-    /* Set the lengths */
     hdr.len = (pathname == NULL) ? 0 : sb.st_size;
     hdr.namelen = strlen(name);
 
     /*
-     * The next pointer being 0 indicates that we
-     * have reached the end of the archive. If we
-     * haven't reached the end of the file, compute
-     * the next header offset.
+     * If we are at the end of the file, use the OMAR_EOF
+     * magic constant instant of the usual OMAR_MAGIC.
      */
-    if (pathname != NULL) {
-        hdr.nextptr = sizeof(hdr) + ALIGN_UP(hdr.len, BLOCK_SIZE);
-        printf("NEXT POINTER: %d\n", hdr.nextptr);
+    if (pathname == NULL) {
+        memcpy(hdr.magic, OMAR_EOF, sizeof(hdr.magic));
     } else {
-        hdr.nextptr = 0;
+        memcpy(hdr.magic, OMAR_MAGIC, sizeof(hdr.magic));
     }
-    memcpy(hdr.magic, "OMAR", sizeof(hdr.magic));
+
     write(outfd, &hdr, sizeof(hdr));
     write(outfd, name, hdr.namelen);
+
+    /* If we are at the end of file, we are done */
     if (pathname == NULL) {
-        /* EOF, we are done */
+        close(infd);
         return 0;
     }
 
-    /* If this is a dir, our work is done here */
-    if (S_ISDIR(sb.st_mode)) {
-        hdr.type |= OMAR_DIR;
-        close(infd);
+    /* Pad directories to zero */
+    if (hdr.type == OMAR_DIR) {
+        len = sizeof(hdr) + hdr.namelen;
+        rem = len & (BLOCK_SIZE - 1);
+        pad_len = BLOCK_SIZE - rem;
+
+        buf = malloc(pad_len);
+        memset(buf, 0, pad_len);
+        write(outfd, buf, pad_len);
+        free(buf);
         return 0;
     }
 
@@ -155,7 +169,8 @@ file_push(const char *pathname, const char *name)
      * to zero.
      */
     write(outfd, buf, hdr.len);
-    rem = hdr.len & (BLOCK_SIZE - 1);
+    len = sizeof(hdr) + (hdr.namelen + hdr.len);
+    rem = len & (BLOCK_SIZE - 1);
     if (rem != 0) {
         /* Compute the padding length */
         pad_len = BLOCK_SIZE - rem;
