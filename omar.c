@@ -49,9 +49,14 @@
 #define OMAR_REG    0
 #define OMAR_DIR    1
 
+/* OMAR modes */
+#define OMAR_ARCHIVE  0
+#define OMAR_EXTRACT  1
+
 #define ALIGN_UP(value, align)        (((value) + (align)-1) & ~((align)-1))
 #define BLOCK_SIZE 512
 
+static int mode = OMAR_ARCHIVE;
 static int outfd;
 static const char *inpath = NULL;
 static const char *outpath = NULL;
@@ -78,7 +83,34 @@ help(void)
     printf("The OSMORA archive format\n");
     printf("Usage: omar -i [input_dir] -o [output]\n");
     printf("-h      Show this help screen\n");
+    printf("-x      Extract an OMAR archive\n");
     printf("--------------------------------------\n");
+}
+
+/*
+ * Recursive mkdir
+ */
+static void
+mkpath(const char *path)
+{
+    size_t len;
+    char buf[256];
+    char cwd[256];
+    char *p = NULL;
+
+    len = snprintf(buf, sizeof(buf), "%s", path);
+    if (buf[len - 1] == '/') {
+        buf[len - 1] = '\0';
+    }
+    for (p = (char *)buf + 1; *p != '\0'; ++p) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(buf, 0700);
+            *p = '/';
+        }
+    }
+
+    mkdir(buf, 0700);
 }
 
 /*
@@ -194,6 +226,7 @@ archive_create(const char *base, const char *dirname)
     DIR *dp;
     struct dirent *ent;
     struct omar_hdr hdr;
+    const char *p = NULL;
     char pathbuf[256];
     char namebuf[256];
 
@@ -209,18 +242,120 @@ archive_create(const char *base, const char *dirname)
         }
         snprintf(pathbuf, sizeof(pathbuf), "%s/%s", base, ent->d_name);
         snprintf(namebuf, sizeof(namebuf), "%s/%s", dirname, ent->d_name);
+
         if (ent->d_type == DT_DIR) {
             printf("%s [d]\n", namebuf);
-            file_push(pathbuf, ent->d_name);
-            archive_create(pathbuf, basename(pathbuf));
+            file_push(pathbuf, namebuf);
+            archive_create(pathbuf, namebuf);
         } else if (ent->d_type == DT_REG) {
             printf("%s [f]\n", namebuf);
-            file_push(pathbuf, ent->d_name);
+            file_push(pathbuf, namebuf);
         }
     }
 
-    file_push(NULL, "EOF");
     return 0;
+}
+
+/*
+ * Extract a single file
+ *
+ * @data: Data to extract
+ * @len: Length of data
+ * @path: Path to output file
+ */
+static int
+extract_single(char *data, size_t len, const char *path)
+{
+    int fd;
+
+    if ((fd = open(path, O_WRONLY | O_CREAT, 0700)) < 0) {
+        return fd;
+    }
+
+    return write(fd, data, len) > 0 ? 0 : -1;
+}
+
+/*
+ * Extract an OMAR archive.
+ *
+ * XXX: The input file [-i] will be the OMAR archive to
+ *      be extracted, the output directory [-o] will be
+ *      where the files get extracted.
+ */
+static int
+archive_extract(void)
+{
+    char *buf, *name, *p;
+    struct stat sb;
+    struct omar_hdr *hdr;
+    int fd, error;
+    off_t off;
+    char namebuf[256];
+
+    if ((fd = open(inpath, O_RDONLY)) < 0) {
+        perror("open");
+        return fd;
+    }
+
+    if ((error = fstat(fd, &sb)) != 0) {
+        perror("fstat");
+        close(fd);
+        return error;
+    }
+
+    buf = malloc(sb.st_size);
+    if (buf == NULL) {
+        fprintf(stderr, "out of memory\n");
+        close(fd);
+        return -ENOMEM;
+    }
+
+    if (read(fd, buf, sb.st_size) <= 0) {
+        fprintf(stderr, "omar: no data read\n");
+        close(fd);
+        return -EIO;
+    }
+
+    hdr = (struct omar_hdr *)buf;
+    for (;;) {
+        #if 0
+        printf("MAGIC: %s\n", hdr->magic);
+        printf("TYPE: %d\n", hdr->type);
+        printf("LEN: %d\n", hdr->len);
+        printf("NAMELEN: %d\n", hdr->namelen);
+        #endif
+
+        if (memcmp(hdr->magic, OMAR_EOF, sizeof(OMAR_EOF)) == 0) {
+            printf("EOF!\n");
+            return 0;
+        }
+
+        /* Ensure the header is valid */
+        if (memcmp(hdr->magic, "OMAR", 4) != 0) {
+            fprintf(stderr, "bad magic\n");
+            break;
+        }
+
+        name = (char *)hdr + sizeof(struct omar_hdr);
+        memcpy(namebuf, name, hdr->namelen);
+        namebuf[hdr->namelen] = '\0';
+        printf("unpacking %s\n", namebuf);
+
+        if (hdr->type == OMAR_DIR) {
+            off = 512;
+            mkpath(namebuf);
+        } else {
+            off = ALIGN_UP(sizeof(hdr) + hdr->namelen + hdr->len, BLOCK_SIZE);
+            p = (char *)hdr + sizeof(struct omar_hdr);
+            p += hdr->namelen;
+            extract_single(p, hdr->len, namebuf);
+        }
+
+        hdr = (struct omar_hdr *)((char *)hdr + off);
+        memset(namebuf, 0, sizeof(namebuf));
+    }
+
+    free(buf);
 }
 
 int
@@ -234,8 +369,11 @@ main(int argc, char **argv)
         return -1;
     }
 
-    while ((optc = getopt(argc, argv, "hi:o:")) != -1) {
+    while ((optc = getopt(argc, argv, "xhi:o:")) != -1) {
         switch (optc) {
+        case 'x':
+            mode = OMAR_EXTRACT;
+            break;
         case 'i':
             inpath = optarg;
             break;
@@ -262,14 +400,32 @@ main(int argc, char **argv)
         return -1;
     }
 
-    flags = S_IRUSR | S_IWUSR;
-    outfd = open(outpath, O_WRONLY | O_CREAT, flags);
-    if (outfd < 0) {
-        printf("omar: failed to open output file\n");
-        return outfd;
-    }
+    /*
+     * Do our specific job based on the mode
+     * OMAR is set to be in.
+     */
+    switch (mode) {
+    case OMAR_ARCHIVE:
+        /* Begin archiving the file */
+        outfd = open(outpath, O_WRONLY | O_CREAT, 0700);
+        if (outfd < 0) {
+            printf("omar: failed to open output file\n");
+            return outfd;
+        }
 
-    retval = archive_create(inpath, basename((char *)inpath));
+        retval = archive_create(inpath, basename((char *)inpath));
+        file_push(NULL, "EOF");
+        break;
+    case OMAR_EXTRACT:
+        /* Begin extracting the file */
+        if ((error = mkdir(outpath, 0700) != 0)) {
+            perror("mkdir");
+            return error;
+        }
+
+        retval = archive_extract();
+        break;
+    }
     close(outfd);
     return retval;
 }
