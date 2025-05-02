@@ -338,7 +338,7 @@ archive_extract(void)
             off = 512;
             mkpath(namebuf);
         } else {
-            off = ALIGN_UP(sizeof(hdr) + hdr->namelen + hdr->len, BLOCK_SIZE);
+            off = ALIGN_UP(sizeof(*hdr) + hdr->namelen + hdr->len, BLOCK_SIZE);
             p = (char *)hdr + sizeof(struct omar_hdr);
             p += hdr->namelen;
             extract_single(p, hdr->len, namebuf);
