@@ -318,13 +318,6 @@ archive_extract(void)
 
     hdr = (struct omar_hdr *)buf;
     for (;;) {
-        #if 0
-        printf("MAGIC: %s\n", hdr->magic);
-        printf("TYPE: %d\n", hdr->type);
-        printf("LEN: %d\n", hdr->len);
-        printf("NAMELEN: %d\n", hdr->namelen);
-        #endif
-
         if (memcmp(hdr->magic, OMAR_EOF, sizeof(OMAR_EOF)) == 0) {
             printf("EOF!\n");
             return 0;
