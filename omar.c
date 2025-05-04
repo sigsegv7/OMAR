@@ -88,6 +88,27 @@ help(void)
 }
 
 /*
+ * Strip out root dir
+ *
+ * XXX: This is added code to work with Hyra
+ *      initramfs.
+ */
+static const char *
+strip_root(const char *path)
+{
+    const char *p;
+
+    for (p = path; *p != '\0'; ++p) {
+        if (*p == '/') {
+            ++p;
+            return p;
+        }
+    }
+
+    return NULL;
+}
+
+/*
  * Recursive mkdir
  */
 static void
@@ -226,7 +247,7 @@ archive_create(const char *base, const char *dirname)
     DIR *dp;
     struct dirent *ent;
     struct omar_hdr hdr;
-    const char *p = NULL;
+    const char *p = NULL, *p1;
     char pathbuf[256];
     char namebuf[256];
 
@@ -240,16 +261,18 @@ archive_create(const char *base, const char *dirname)
         if (ent->d_name[0] == '.') {
             continue;
         }
+
         snprintf(pathbuf, sizeof(pathbuf), "%s/%s", base, ent->d_name);
         snprintf(namebuf, sizeof(namebuf), "%s/%s", dirname, ent->d_name);
+        p1 = strip_root(namebuf);
 
         if (ent->d_type == DT_DIR) {
-            printf("%s [d]\n", namebuf);
-            file_push(pathbuf, namebuf);
+            printf("%s [d]\n", p1);
+            file_push(pathbuf, p1);
             archive_create(pathbuf, namebuf);
         } else if (ent->d_type == DT_REG) {
-            printf("%s [f]\n", namebuf);
-            file_push(pathbuf, namebuf);
+            printf("%s [f]\n", p1);
+            file_push(pathbuf, p1);
         }
     }
 
@@ -289,8 +312,10 @@ archive_extract(void)
     struct stat sb;
     struct omar_hdr *hdr;
     int fd, error;
+    size_t len;
     off_t off;
     char namebuf[256];
+    char pathbuf[256];
 
     if ((fd = open(inpath, O_RDONLY)) < 0) {
         perror("open");
@@ -332,16 +357,23 @@ archive_extract(void)
         name = (char *)hdr + sizeof(struct omar_hdr);
         memcpy(namebuf, name, hdr->namelen);
         namebuf[hdr->namelen] = '\0';
-        printf("unpacking %s\n", namebuf);
+
+        /* Get the full path */
+        len = snprintf(pathbuf, sizeof(pathbuf), "%s/%s", outpath, namebuf);
+        if (len < 0) {
+            free(buf);
+            return len;
+        }
+        printf("unpacking %s\n", pathbuf);
 
         if (hdr->type == OMAR_DIR) {
             off = 512;
-            mkpath(namebuf);
+            mkpath(pathbuf);
         } else {
             off = ALIGN_UP(sizeof(*hdr) + hdr->namelen + hdr->len, BLOCK_SIZE);
             p = (char *)hdr + sizeof(struct omar_hdr);
             p += hdr->namelen;
-            extract_single(p, hdr->len, namebuf);
+            extract_single(p, hdr->len, pathbuf);
         }
 
         hdr = (struct omar_hdr *)((char *)hdr + off);
