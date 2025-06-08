@@ -29,6 +29,7 @@
 
 #include <sys/stat.h>
 #include <sys/errno.h>
+#include <sys/types.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <stdbool.h>
@@ -53,6 +54,9 @@
 #define OMAR_ARCHIVE  0
 #define OMAR_EXTRACT  1
 
+/* Revision */
+#define OMAR_REV 2
+
 #define ALIGN_UP(value, align)        (((value) + (align)-1) & ~((align)-1))
 #define BLOCK_SIZE 512
 
@@ -68,12 +72,14 @@ static const char *outpath = NULL;
  * @magic: Header magic ("OMAR")
  * @len: Length of the file
  * @namelen: Length of the filename
+ * @rev: OMAR revision
  */
 struct omar_hdr {
     char magic[4];
     uint8_t type;
     uint8_t namelen;
     uint32_t len;
+    uint8_t rev;
 } __attribute__((packed));
 
 static inline void
@@ -169,6 +175,7 @@ file_push(const char *pathname, const char *name)
     }
 
     hdr.len = (pathname == NULL) ? 0 : sb.st_size;
+    hdr.rev = OMAR_REV;
     hdr.namelen = strlen(name);
 
     /*
@@ -352,6 +359,10 @@ archive_extract(void)
         if (memcmp(hdr->magic, "OMAR", 4) != 0) {
             fprintf(stderr, "bad magic\n");
             break;
+        }
+        if (hdr->rev != OMAR_REV) {
+            fprintf(stderr, "cannot extract rev %d archive\n", hdr->rev);
+            fprintf(stderr, "current OMAR revision: %d\n", OMAR_REV);
         }
 
         name = (char *)hdr + sizeof(struct omar_hdr);
