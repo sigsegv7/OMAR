@@ -29,7 +29,6 @@
 
 #include <sys/stat.h>
 #include <sys/errno.h>
-#include <sys/types.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <stdbool.h>
@@ -81,7 +80,7 @@ struct omar_hdr {
     uint8_t namelen;
     uint32_t len;
     uint8_t rev;
-    mode_t mode;
+    uint32_t mode;
 } __attribute__((packed));
 
 static inline void
