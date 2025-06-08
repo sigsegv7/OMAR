@@ -73,6 +73,7 @@ static const char *outpath = NULL;
  * @len: Length of the file
  * @namelen: Length of the filename
  * @rev: OMAR revision
+ * @mode: File permissions
  */
 struct omar_hdr {
     char magic[4];
@@ -80,6 +81,7 @@ struct omar_hdr {
     uint8_t namelen;
     uint32_t len;
     uint8_t rev;
+    mode_t mode;
 } __attribute__((packed));
 
 static inline void
@@ -118,7 +120,7 @@ strip_root(const char *path)
  * Recursive mkdir
  */
 static void
-mkpath(const char *path)
+mkpath(struct omar_hdr *hdr, const char *path)
 {
     size_t len;
     char buf[256];
@@ -132,12 +134,12 @@ mkpath(const char *path)
     for (p = (char *)buf + 1; *p != '\0'; ++p) {
         if (*p == '/') {
             *p = '\0';
-            mkdir(buf, 0700);
+            mkdir(buf, hdr->mode);
             *p = '/';
         }
     }
 
-    mkdir(buf, 0700);
+    mkdir(buf, hdr->mode);
 }
 
 /*
@@ -172,6 +174,7 @@ file_push(const char *pathname, const char *name)
         if (S_ISDIR(sb.st_mode)) {
             hdr.type = OMAR_DIR;
         }
+        hdr.mode = sb.st_mode;
     }
 
     hdr.len = (pathname == NULL) ? 0 : sb.st_size;
@@ -289,16 +292,17 @@ archive_create(const char *base, const char *dirname)
 /*
  * Extract a single file
  *
+ * @hp: File header
  * @data: Data to extract
  * @len: Length of data
  * @path: Path to output file
  */
 static int
-extract_single(char *data, size_t len, const char *path)
+extract_single(struct omar_hdr *hp, char *data, size_t len, const char *path)
 {
     int fd;
 
-    if ((fd = open(path, O_WRONLY | O_CREAT, 0700)) < 0) {
+    if ((fd = open(path, O_WRONLY | O_CREAT, hp->mode)) < 0) {
         return fd;
     }
 
@@ -379,12 +383,12 @@ archive_extract(void)
 
         if (hdr->type == OMAR_DIR) {
             off = 512;
-            mkpath(pathbuf);
+            mkpath(hdr, pathbuf);
         } else {
             off = ALIGN_UP(sizeof(*hdr) + hdr->namelen + hdr->len, BLOCK_SIZE);
             p = (char *)hdr + sizeof(struct omar_hdr);
             p += hdr->namelen;
-            extract_single(p, hdr->len, pathbuf);
+            extract_single(hdr, p, hdr->len, pathbuf);
         }
 
         hdr = (struct omar_hdr *)((char *)hdr + off);
