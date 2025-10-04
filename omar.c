@@ -63,6 +63,7 @@ static int mode = OMAR_ARCHIVE;
 static int outfd;
 static const char *inpath = NULL;
 static const char *outpath = NULL;
+static const char *mbrpath = NULL;
 
 /*
  * The OMAR file header, describes the basics
@@ -91,6 +92,7 @@ help(void)
     printf("Usage: omar -i [input_dir] -o [output]\n");
     printf("-h      Show this help screen\n");
     printf("-x      Extract an OMAR archive\n");
+    printf("-m      Stick an MBR image at the start\n");
     printf("--------------------------------------\n");
 }
 
@@ -289,6 +291,29 @@ archive_create(const char *base, const char *dirname)
 }
 
 /*
+ * Push an MBR to the start of the OMAR image
+ */
+static int
+mbr_push(const char *path)
+{
+    int fd, error;
+    char mbr[512];
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return fd;
+    }
+
+    /* Read the MBR */
+    if ((error = read(fd, mbr, sizeof(mbr))) < 0) {
+        return error;
+    }
+
+    write(outfd, mbr, sizeof(mbr));
+    return 0;
+}
+
+/*
  * Extract a single file
  *
  * @hp: File header
@@ -408,7 +433,7 @@ main(int argc, char **argv)
         return -1;
     }
 
-    while ((optc = getopt(argc, argv, "xhi:o:")) != -1) {
+    while ((optc = getopt(argc, argv, "xhi:m:o:")) != -1) {
         switch (optc) {
         case 'x':
             mode = OMAR_EXTRACT;
@@ -418,6 +443,9 @@ main(int argc, char **argv)
             break;
         case 'o':
             outpath = optarg;
+            break;
+        case 'm':
+            mbrpath = optarg;
             break;
         case 'h':
             help();
@@ -450,6 +478,14 @@ main(int argc, char **argv)
         if (outfd < 0) {
             printf("omar: failed to open output file\n");
             return outfd;
+        }
+
+        /* If we can, push an MBR */
+        if (mbrpath != NULL) {
+            retval = mbr_push(mbrpath);
+        }
+        if (retval != 0) {
+            return retval;
         }
 
         retval = archive_create(inpath, basename((char *)inpath));
